@@ -6,6 +6,10 @@ import { pathToFileURL } from 'node:url';
 
 const KEY_OK = /^[A-Za-z0-9_-]{4,64}$/, MAXINLINE = 60000, BUCKETS = 64;
 const np = x => String(x).length > 1 ? String(x).replace(/\/+$/, '') : String(x);
+// Owner mode: when the pages folder holds the ASAP-Rank sales page (the asap-page meta tag), this repository is the public front door. Home, login, sign-up and the app are served from the domain root, and Google Analytics is added to the home and login pages only: never to the signed-in app and never to a customer's own pages.
+export const FRONT_DEFAULT = 'https://asap-rank.artistryc.in';
+export const gaTag = id => '<script async src="https://www.googletagmanager.com/gtag/js?id=' + id + '"></script><script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag("js",new Date());gtag("config","' + id + '",{send_page_view:false,anonymize_ip:true,allow_google_signals:false,allow_ad_personalization_signals:false});(function(){var H=/^#(login|signup|forgot|pay|first)$/;function pv(){var h=H.test(location.hash)?location.hash.slice(1):"",p=location.pathname+(h?"/"+h:"");gtag("event","page_view",{page_location:location.origin+p,page_path:p,page_title:document.title});}pv();addEventListener("hashchange",pv);document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest("a[href*=signup]");if(a)gtag("event","start_now_click",{location:"page"})})})();</script>';
+export const isOwnerSite = dir => { try { return /<meta name="asap-page" content="sales">/.test(fs.readFileSync(path.join(dir, 'index.html'), 'utf8')) } catch (e) { return false } };
 export const bucket = p => { let h = 2166136261; for (let i = 0; i < p.length; i++) { h ^= p.charCodeAt(i); h = Math.imul(h, 16777619) } return (h >>> 0) % BUCKETS };
 // A page rule is "exact" when it names one page. Anything with a wildcard, regex or list goes in the shared "w" shard.
 const exact = p => { p = String(p || '').trim(); return !!p && !/[*\n,]/.test(p) && !p.startsWith('re:') };
@@ -46,11 +50,20 @@ export async function main() {
   const pagesDir = fs.existsSync('site') ? 'site' : fs.existsSync('app.html') ? '.' : '';
   const note = t => fs.writeFileSync(path.join(root, 'index.html'), '<!doctype html><meta charset=utf-8><title>ASAP-Rank files</title><body style="font-family:system-ui;max-width:560px;margin:40px auto;padding:0 16px"><h2>ASAP-Rank files are published</h2><p>' + t + '</p>');
   if (APP_URL && pagesDir) {
-    const app = path.join(root, 'app'); fs.rmSync(app, { recursive: true, force: true }); fs.mkdirSync(app, { recursive: true });
-    for (const f of pagesDir === 'site' ? fs.readdirSync('site') : PAGES.filter(x => fs.existsSync(x))) if (f !== 'config.js') fs.copyFileSync(path.join(pagesDir, f), path.join(app, f));
+    const app = root; fs.rmSync(path.join(root, 'app'), { recursive: true, force: true }); // pages sit in the site root so addresses stay short: /auth and /app, with no folder and no .html
+    for (const f of pagesDir === 'site' ? fs.readdirSync('site') : PAGES.filter(x => fs.existsSync(x))) if (f !== 'config.js' && f !== 'analytics.txt') fs.copyFileSync(path.join(pagesDir, f), path.join(app, f));
     const sb = process.env.ASAP_SB_URL && process.env.ASAP_SB_ANON ? "\nwindow.ASAP_SB_URL = " + JSON.stringify(process.env.ASAP_SB_URL) + ";\nwindow.ASAP_SB_ANON = " + JSON.stringify(process.env.ASAP_SB_ANON) + ";" : '';
-    fs.writeFileSync(path.join(app, 'config.js'), "window.ASAP_API = " + JSON.stringify(APP_URL.replace(/\/+$/, '')) + ";" + sb + "\n");
-    fs.writeFileSync(path.join(root, 'index.html'), '<!doctype html><meta charset=utf-8><meta http-equiv=refresh content="0;url=app/"><title>ASAP-Rank</title><a href="app/">Open ASAP-Rank</a>');
+    const own = pagesDir === 'site' && isOwnerSite('site'), cfgTxt = "window.ASAP_API = " + JSON.stringify(APP_URL.replace(/\/+$/, '')) + ";" + (own ? "\nwindow.ASAP_FRONT = true;" : '') + sb + "\n";
+    fs.writeFileSync(path.join(app, 'config.js'), cfgTxt);
+    if (own) {
+      const FRONT = (process.env.FRONT_URL || FRONT_DEFAULT).replace(/\/+$/, ''), GA = (process.env.GA_ID || (fs.existsSync('site/analytics.txt') ? fs.readFileSync('site/analytics.txt', 'utf8') : '')).trim().replace(/[^A-Za-z0-9-]/g, '');
+      for (const f of fs.readdirSync('site')) {
+        const src = path.join('site', f); if (f === 'config.js' || !fs.statSync(src).isFile()) continue;
+        let t = fs.readFileSync(src); if (/\.(html|txt|xml)$/.test(f)) { t = fs.readFileSync(src, 'utf8').split(FRONT_DEFAULT).join(FRONT); if (GA && ['index.html', 'auth.html'].includes(f)) t = t.replace('</head>', gaTag(GA) + '</head>') } if (f === 'analytics.txt') continue;
+        fs.writeFileSync(path.join(root, f), t);
+      }
+      fs.writeFileSync(path.join(root, 'config.js'), cfgTxt);
+    }
   } else if (!APP_URL) note('The APP_URL secret is missing in this repository (Settings, Secrets and variables, Actions), so the dashboard pages were not added. Add it, then run the publish workflow again.');
   else note('The dashboard pages were not found. Put the folder "site" (or app.html, auth.html, index.html, 404.html and customer-setup.html) in the repository root, then run the publish workflow again.');
   // the loader and chat scripts, so the page-view traffic does not touch the Worker
