@@ -48,6 +48,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           APP_URL: ${{ secrets.APP_URL }}
+          FRONT_URL: ${{ secrets.FRONT_URL }}
       - name: Save the files
         run: |
           git config user.name "${{ github.actor }}"; git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
@@ -58,3 +59,21 @@ jobs:
         with: { path: docs }
       - id: dep
         uses: actions/deploy-pages@v4
+      # Optional backup copy of your login and sales pages on another web host (see the setup guide). Never stops publishing.
+      - name: Prepare the backup copy of your pages
+        continue-on-error: true
+        run: node mirror.mjs stage docs bluehost-site
+      - name: Keep the backup copy (download it from this run if you do not use FTP)
+        if: hashFiles('bluehost-site/index.html') != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with: { name: pages-backup-copy, path: bluehost-site, include-hidden-files: true, retention-days: 14 }
+      - name: Send the backup copy to your web host (only when the BLUEHOST_FTP secrets are set)
+        if: hashFiles('bluehost-site/index.html') != ''
+        continue-on-error: true
+        env:
+          BLUEHOST_FTP_HOST: ${{ secrets.BLUEHOST_FTP_HOST }}
+          BLUEHOST_FTP_USER: ${{ secrets.BLUEHOST_FTP_USER }}
+          BLUEHOST_FTP_PASS: ${{ secrets.BLUEHOST_FTP_PASS }}
+          BLUEHOST_FTP_DIR: ${{ secrets.BLUEHOST_FTP_DIR }}
+        run: node mirror.mjs upload bluehost-site
