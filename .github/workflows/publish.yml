@@ -7,10 +7,9 @@ on:
 permissions: { contents: write, pages: write, id-token: write }
 concurrency: { group: asap-publish, cancel-in-progress: false }
 jobs:
+  # Two jobs on purpose: the files are built and uploaded first, then a separate job deploys them.
+  # GitHub sometimes cannot find an artifact that was uploaded a split second earlier in the same job.
   publish:
-    environment:
-      name: github-pages
-      url: ${{ steps.dep.outputs.page_url }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -55,10 +54,8 @@ jobs:
           git add docs
           if git diff --cached --quiet; then echo "nothing new"; else git commit -m "publish $(date -u +%FT%TZ)"; git pull --rebase -q || true; git push; fi
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@v5
         with: { path: docs }
-      - id: dep
-        uses: actions/deploy-pages@v4
       # Optional backup copy of your login and sales pages on another web host (see the setup guide). Never stops publishing.
       - name: Prepare the backup copy of your pages
         continue-on-error: true
@@ -77,3 +74,13 @@ jobs:
           BLUEHOST_FTP_PASS: ${{ secrets.BLUEHOST_FTP_PASS }}
           BLUEHOST_FTP_DIR: ${{ secrets.BLUEHOST_FTP_DIR }}
         run: node mirror.mjs upload bluehost-site
+  deploy:
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.dep.outputs.page_url }}
+    steps:
+      - id: dep
+        uses: actions/deploy-pages@v5
