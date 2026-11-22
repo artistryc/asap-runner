@@ -32,6 +32,25 @@ export function writeSite(root, site, body) {
   return true;
 }
 
+// Keeps the public repository tidy. A site that was deleted loses its files at once. A site that was switched off, or whose plan ended, keeps them for 3 months (so a renewal comes back instantly), then they are removed too.
+export const GRACE_DAYS = 90;
+export function prune(root, keep) {
+  let n = 0;
+  for (const [dir, ext] of [['c', '.json'], ['b', '.js']]) {
+    const d = path.join(root, dir); if (!fs.existsSync(d)) continue;
+    for (const f of fs.readdirSync(d)) {
+      const full = path.join(d, f), isDir = fs.statSync(full).isDirectory(), site = isDir ? f : f.endsWith(ext) ? f.slice(0, -ext.length) : null;
+      if (site === null || !KEY_OK.test(site) || keep.has(site)) continue;
+      fs.rmSync(full, { recursive: true, force: true }); n++;
+    }
+  }
+  return n;
+}
+export const liveSites = (rows, now = Date.now()) => new Set(rows.filter(x => {
+  const ended = x.off ? (Date.parse(x.updated) || 0) : (x.until && x.until < now ? x.until : 0);
+  return !ended || now - ended < GRACE_DAYS * 864e5;
+}).map(x => x.site));
+
 export async function main() {
   const { SUPABASE_URL, SUPABASE_SERVICE_KEY, APP_URL } = process.env; if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) { console.error('Set SUPABASE_URL and SUPABASE_SERVICE_KEY.'); process.exit(1) }
   const base = SUPABASE_URL.replace(/\/+$/, '') + '/rest/v1/', H = { apikey: SUPABASE_SERVICE_KEY, authorization: 'Bearer ' + SUPABASE_SERVICE_KEY, 'content-type': 'application/json' }, root = process.env.DOCS_DIR || 'docs';
@@ -44,6 +63,14 @@ export async function main() {
     const u = await fetch(base + 'static_cfg?site=in.(' + done.map(encodeURIComponent).join(',') + ')', { method: 'PATCH', headers: { ...H, prefer: 'return=minimal' }, body: JSON.stringify({ dirty: false }) }); if (!u.ok) throw new Error('Supabase mark ' + u.status);
     if (rows.length < 250) break;
   }
+  // remove the files of deleted sites at once, and of switched-off or expired sites after 3 months (skipped when the list cannot be read, so an outage never wipes files)
+  try {
+    const all = []; for (let off = 0; off < 100000; off += 1000) {
+      const r = await fetch(base + 'static_cfg?select=site,updated,off:body->off,until:body->until&order=site&limit=1000&offset=' + off, { headers: H }); if (!r.ok) throw new Error('Supabase ' + r.status);
+      const part = await r.json(); all.push(...part); if (part.length < 1000) break;
+    }
+    if (all.length) console.log(JSON.stringify({ removed: prune(root, liveSites(all)) }));
+  } catch (e) { console.error('cleanup skipped:', e.message) }
   // the dashboard, sales page, login and customer setup wizard: served free by Pages, so opening the dashboard costs the Worker nothing.
   // The pages live in the folder "site", or directly in the repository root if they were uploaded there.
   const PAGES = ['404.html', 'app.html', 'auth.html', 'customer-setup.html', 'index.html'];
